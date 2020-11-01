@@ -7,6 +7,7 @@ var http = require('http');
 var https = require('https');
 var url=require("url");
 var run=require("../../model/runModel")
+var ext = require("./ext");
 var getHeader = function (req) {
     var ret = {};
     for (var i in req.headers) {
@@ -231,6 +232,64 @@ var onProxy = function (req, res) {
     },function (err) {
 
     })
+    if (ext.isCond(req)) {
+        // 前置处理
+        var encoding = 'utf8';
+        ext.preSet(req, opt);
+        let body = [];
+        req.on('data', (chunk) => {
+            body.push(chunk);
+        }).on('end', () => {
+            // 获取请求数据
+            let len = body.length;
+            if (body.length > 0) {
+                //console.log('url:', req2)
+                body = Buffer.concat(body).toString(encoding);
+                console.log('req body:', body)
+                enBody = ext.aesEncrypt(body).toUpperCase();
+                //console.log('enBody:', enBody)
+                len = enBody.length;
+            }
+            opt.headers['Content-Length'] = len;
+            // 发起新请求
+            var req2 = request(opt, function (res2) {
+                if (res2.statusCode == 302) {
+                    handleCookieIfNecessary(opt, res2.headers);
+                    redirect(res, bHttps, opt, res2.headers.location)
+                }
+                else {
+                    var resHeader = filterResHeader(res2.headers)
+                    resHeader["doclever-request"] = JSON.stringify(handleSelfCookie(req2));
+                    res.writeHead(res2.statusCode, resHeader);
+                    // 获取响应数据
+                    let res2Body = [];
+                    res2.on('data', (chunk) => {
+                        res2Body.push(chunk);
+                    }).on('end', () => {
+                        console.log("res headers:", res2.headers);
+                        let bodyBuf = Buffer.concat(res2Body);
+                        if (res2.headers['secure'] && res2.statusCode == 200) {
+                            let bodyStr = bodyBuf.toString(encoding);
+                            //console.log('bodyStr:', bodyStr);
+                            deBody = ext.aesDecrypt(bodyStr);
+                            console.log('res body:', deBody);
+                            res.write(deBody);
+                        } else {
+                            res.write(bodyBuf);
+                        }
+                        res.end();
+                    });
+                }
+            });
+            if (len > 0) {
+                req2.write(enBody);
+            }
+            req2.end();
+            req2.on('error', function (err) {
+                res.end(err.stack);
+            });
+        });
+    }else{
     var req2 = request(opt, function (res2) {
         if(res2.statusCode==302)
         {
@@ -244,7 +303,6 @@ var onProxy = function (req, res) {
             res.writeHead(res2.statusCode, resHeader);
             res2.pipe(res);
             res2.on('end', function () {
-
             });
         }
     });
@@ -256,6 +314,7 @@ var onProxy = function (req, res) {
     req2.on('error', function (err) {
         res.end(err.stack);
     });
+    }
 };
 
 router.post("/",function (req,res) {
